@@ -1,0 +1,3 @@
+/home/hania/CLionProjects/hangman/cmake-build-debug/CMakeFiles/rebuild_cache.dir
+/home/hania/CLionProjects/hangman/cmake-build-debug/CMakeFiles/hangman.dir
+/home/hania/CLionProjects/hangman/cmake-build-debug/CMakeFiles/edit_cache.dir

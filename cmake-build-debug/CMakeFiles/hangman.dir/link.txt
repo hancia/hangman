@@ -1,0 +1,1 @@
+/usr/bin/c++  -g   CMakeFiles/hangman.dir/main.cpp.o CMakeFiles/hangman.dir/client.cpp.o CMakeFiles/hangman.dir/server.cpp.o CMakeFiles/hangman.dir/Message.cpp.o CMakeFiles/hangman.dir/Player.cpp.o  -o hangman 
