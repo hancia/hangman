@@ -31,3 +31,5 @@ sites
 *.out
 *.app
 
+.idea
+cmake-build-debug

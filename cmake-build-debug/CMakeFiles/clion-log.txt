@@ -1,4 +1,0 @@
-/home/hania/Pobrane/clion-2018.3.1/bin/cmake/linux/bin/cmake -DCMAKE_BUILD_TYPE=Debug -DCMAKE_MAKE_PROGRAM=/usr/bin/gmake -DCMAKE_C_COMPILER=/usr/bin/cc -DCMAKE_CXX_COMPILER=/usr/bin/c++ -G "CodeBlocks - Unix Makefiles" /home/hania/CLionProjects/hangman
--- Configuring done
--- Generating done
--- Build files have been written to: /home/hania/CLionProjects/hangman/cmake-build-debug
