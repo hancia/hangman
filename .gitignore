@@ -33,3 +33,5 @@ sites
 
 .idea
 cmake-build-debug
+server
+client

@@ -113,7 +113,9 @@ void clientService(int i) {
         char msg[2];
         memset(msg,0,2);
         read(i, msg, 2);
-        cout<<"msg: "<<msg<<endl;
+        if(strcmp(msg, "1") == 0){
+            return;
+        }
         if (strcmp(msg, "0") == 0) {
             if (players.size() < playersRequired) {
                 if (!isInGame(i)) {
@@ -145,7 +147,6 @@ void clientService(int i) {
                 }
         }
     }
-    exit(0);
 }
 
 //server shutdown thread
