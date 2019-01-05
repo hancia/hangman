@@ -13,18 +13,19 @@
 #include "Player.h"
 #include <stdlib.h>
 #include <time.h>
+#include "Hangman.h"
 
 using namespace std;
 
-//list of clients connected to a server
+
 list<int> clients;
-//list of players taking part in current game
 list<Player*> players;
 const int noOfWords = 100;
 const int playersRequired = 2;
 string words[noOfWords];
 string word;
 string covered;
+int activePlayers = 0;
 
 
 int sockyy = socket(PF_INET, SOCK_STREAM, 0);
@@ -32,7 +33,7 @@ bool game = false;
 bool run = true;
 bool guess = false;
 
-//checking if a player is currently in a game
+
 bool isInGame(int player) {
     for (auto &i : players)
         if (i->address == player)
@@ -48,24 +49,32 @@ void sendMessage(string msg, int address){
 }
 
 void waitForAGuess(){
-    while(!guess){}
-}
-
-void showScore(int address){
-    string msg;
-    msg = "Scores: ";
-    write(address, msg.c_str(), msg.size());
-    for(auto &i : players){
-        msg = to_string(i->address) + ": " + to_string(i->score) + " \n";
-        write(address, msg.c_str(), msg.size());
+    while(!guess){
+        if(activePlayers<=1) {
+            game = false;
+            break;
+        }
     }
 }
+
+void showScore(Player player){
+    string msg;
+    msg = "Scores: ";
+    write(player.address, msg.c_str(), msg.size());
+    for(auto &i : players){
+        msg = to_string(i->address) + ": " + to_string(i->score) + " \n";
+        write(player.address, msg.c_str(), msg.size());
+    }
+    write(player.address, state[player.fails].c_str(), state[player.fails].size());
+}
+
 
 
 void gameService(){
     int index;
     Message message{};
     while(game){
+        cout<<"Active players game thread: "<<activePlayers<<endl;
         index = rand() % noOfWords;
         word = words[index];
         cout<<"The word is "<<word<<endl;
@@ -73,11 +82,11 @@ void gameService(){
         for(unsigned int a = 0; a<word.size(); a++)
             covered += "*";
         message.msgsize = static_cast<int>(word.size());
-        while(strcmp(word.c_str(), covered.c_str()) != 0) {
+        while(strcmp(word.c_str(), covered.c_str()) != 0 && game) {
             strcpy(message.msg, covered.c_str());
             cout<<"Covered in a game service "<<covered<<endl;
             for (auto &i : players) {
-                showScore(i->address);
+                showScore(*i);
                 write(i->address, message.msg, static_cast<size_t>(message.msgsize));
             }
             waitForAGuess();
@@ -88,8 +97,23 @@ void gameService(){
             write(i->address, msg.c_str(), msg.size());
         }
     }
+    Player *winner;
+    winner = players.front();
+    for(auto &i : players){
+        if(i->score>winner->score) winner = i;
+    }
+    string msgWinner = "You are the winner! The score is "+ to_string(winner->score);
+    string msgLoser = "The winner is " + to_string(winner->address) + ". The score is "+ to_string(winner->score);
+    for(auto &i : players){
+        if(i!=winner) {
+            write(i->address, msgLoser.c_str(), msgLoser.size());
+        }
+        else
+            write(i->address, msgWinner.c_str(), msgWinner.size());
+    }
     exit(0);
 }
+
 
 void waitForPlayers(){
     while(run){
@@ -103,23 +127,27 @@ void waitForPlayers(){
     exit(0);
 }
 
-//processes the message received from a client
+
 void clientService(int i) {
     Message message{};
     Player currentPlayer = Player();
     currentPlayer.address = i;
     currentPlayer.score = 0;
+    currentPlayer.fails = 0;
+    currentPlayer.active = false;
     while (run) {
         char msg[2];
-        memset(msg,0,2);
+        memset(msg, 0, 2);
         read(i, msg, 2);
-        if(strcmp(msg, "1") == 0){
+        if (strcmp(msg, "1") == 0) {
             return;
         }
         if (strcmp(msg, "0") == 0) {
             if (players.size() < playersRequired) {
                 if (!isInGame(i)) {
                     cout << "Player " << i << " ready" << endl;
+                    currentPlayer.active = true;
+                    activePlayers++;
                     players.push_back(&currentPlayer);
                 }
             } else {
@@ -128,28 +156,37 @@ void clientService(int i) {
                 message.msgsize = 22;
                 write(i, message.msg, static_cast<size_t>(message.msgsize));
             }
-        }
-        else {
-            if (isInGame(i) && game)
-                for (unsigned int a = 0; a < word.size(); a++) {
-                    string letter;
-                    letter = word[a];
-                    if (strcmp(msg, letter.c_str()) == 0) {
-                        covered[a] = word[a];
-                        sendMessage("You guessed!", i);
-                        currentPlayer.score+=1;
-                        cout<<"current Player score "<<currentPlayer.score<<endl;
-                        for(auto &z: players){
-                            cout<<"Player "<<z->address<< " "<<z->score<<endl;
+        } else if (currentPlayer.active) {
+            if (isInGame(i) && game) {
+                if (currentPlayer.fails < 6) {
+                    int prevScore = currentPlayer.score;
+                    for (unsigned int a = 0; a < word.size(); a++) {
+                        string letter;
+                        letter = word[a];
+                        if (strcmp(msg, letter.c_str()) == 0) {
+                            covered[a] = word[a];
+                            sendMessage("You guessed!", i);
+                            currentPlayer.score += 1;
+                            cout << "current Player score " << currentPlayer.score << endl;
+                            for (auto &z: players) {
+                                cout << "Player " << z->address << " " << z->score << endl;
+                            }
                         }
-                        guess = true;
                     }
+                    if (prevScore == currentPlayer.score) currentPlayer.fails++;
+                    guess = true;
+                } else {
+                    currentPlayer.active = false;
+                    activePlayers--;
+                    cout<<"Active players player thread after subtracting "<<activePlayers<<endl;
+                    write(i, "You can't guess, waiting for the game to finish...", 50);
                 }
+            }
         }
     }
 }
 
-//server shutdown thread
+
 void shutdownRequest() {
     string input;
     while (run) {

@@ -10,6 +10,8 @@ class Player {
 public:
     int address;
     int score;
+    int fails;
+    bool active;
 };
 
 
