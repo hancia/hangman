@@ -68,13 +68,17 @@ void showScore(Player player){
     write(player.address, state[player.fails].c_str(), state[player.fails].size());
 }
 
+void resetPlayer(Player *player){
+    player->score = 0;
+    player->fails = 0;
+    player->active = false;
+}
 
 
 void gameService(){
     int index;
     Message message{};
     while(game){
-        cout<<"Active players game thread: "<<activePlayers<<endl;
         index = rand() % noOfWords;
         word = words[index];
         cout<<"The word is "<<word<<endl;
@@ -102,25 +106,42 @@ void gameService(){
     for(auto &i : players){
         if(i->score>winner->score) winner = i;
     }
-    string msgWinner = "You are the winner! The score is "+ to_string(winner->score);
-    string msgLoser = "The winner is " + to_string(winner->address) + ". The score is "+ to_string(winner->score);
-    for(auto &i : players){
-        if(i!=winner) {
-            write(i->address, msgLoser.c_str(), msgLoser.size());
+    list<Player*> winners;
+    winners.push_back(winner);
+    for(auto &i: players){
+        if(i->score==winner->score&&i != winner) {
+            winners.push_back(i);
+            cout<<"Its a draw!!!"<<endl;
         }
-        else
-            write(i->address, msgWinner.c_str(), msgWinner.size());
     }
-    exit(0);
+    string msgWinner = "You are the winner! The score is "+ to_string(winner->score);
+    string msgLoser = "The winner is ";
+    for(auto &i: winners)
+        msgLoser+= to_string(i->address);
+    msgLoser+=". The score is "+ to_string(winner->score);
+    for(auto &i : players) {
+        for (auto &a : winners)
+            if (a == i) {
+                write(i->address, msgWinner.c_str(), msgWinner.size());
+                break;
+            }
+        write(i->address, msgLoser.c_str(), msgLoser.size());
+        resetPlayer(i);
+    }
+    while(players.size()!=0)
+        players.pop_back();
 }
 
 
 void waitForPlayers(){
     while(run){
         if(players.size() >= playersRequired){
+            cout<<"Starting a new game "<<endl;
             game = true;
             thread gameThread(gameService);
+            cout<<"Thread join "<<endl;
             gameThread.join();
+            cout<<"Game ended"<<endl;
             game = false;
         }
     }
@@ -149,6 +170,7 @@ void clientService(int i) {
                     currentPlayer.active = true;
                     activePlayers++;
                     players.push_back(&currentPlayer);
+                    cout<<"No of players "<<players.size()<<endl;
                 }
             } else {
                 cout << "Too many players" << endl;
@@ -178,7 +200,6 @@ void clientService(int i) {
                 } else {
                     currentPlayer.active = false;
                     activePlayers--;
-                    cout<<"Active players player thread after subtracting "<<activePlayers<<endl;
                     write(i, "You can't guess, waiting for the game to finish...", 50);
                 }
             }
@@ -196,7 +217,6 @@ void shutdownRequest() {
             run = false;
         }
     }
-    exit(0);
 }
 
 void getWordList(){

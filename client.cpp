@@ -23,7 +23,6 @@ void inputService(bool *run) {
             cout<<input.c_str()<<endl;
             write(sockyy, input.c_str(), input.size());
     }
-    exit(0);
 }
 
 
