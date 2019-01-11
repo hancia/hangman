@@ -24,7 +24,6 @@ using namespace std;
 list<int> clients;
 list<Player*> players;
 const int playersRequired = 2;
-//string words[noOfWords];
 vector<string> words;
 string word;
 string covered;
@@ -34,7 +33,6 @@ int socky = socket(PF_INET, SOCK_STREAM, 0);
 bool game = false;
 atomic<bool> run(true);
 bool guess = false;
-mutex gameMtx;
 mutex guessMtx;
 mutex playersMtx;
 mutex newPlayersMtx;
@@ -49,12 +47,14 @@ bool isInGame(int player) {
     return false;
 }
 
-void sendMessage(string str, int address){
-    char msg[100];
-    int msgsize;
-    strcpy(msg, str.c_str());
-    msgsize = str.size();
-    write(address, msg, static_cast<size_t>(msgsize));
+void sendMessagetoPlayer(string str, Player *player){
+    int writeResult = static_cast<int>(write(player->address, str.c_str(), str.size()));
+    if(writeResult < 0){
+        if(player->active) {
+            player->active = false;
+            activePlayers--;
+        }
+    }
 }
 
 void playersLeft(){
@@ -71,9 +71,9 @@ void showScore(Player player){
     write(player.address, msg.c_str(), msg.size());
     for(auto &i : players){
         msg = to_string(i->address) + ": " + to_string(i->score) + " \n";
-        write(player.address, msg.c_str(), msg.size());
+        sendMessagetoPlayer(msg, i);
     }
-    write(player.address, state[player.fails].c_str(), state[player.fails].size());
+    sendMessagetoPlayer(state[player.fails], &player);
 }
 
 void resetPlayer(Player *player){
@@ -86,7 +86,6 @@ void resetPlayer(Player *player){
 void gameService(){
     int index;
     char msg[100];
-    int msgsize;
     thread playerNumberHandler(playersLeft);
     playerNumberHandler.detach();
     while(game && run){
@@ -97,15 +96,12 @@ void gameService(){
         covered="";
         for(unsigned int a = 0; a<word.size(); a++)
             covered += "*";
-        msgsize = static_cast<int>(word.size());
         while(strcmp(word.c_str(), covered.c_str()) != 0 && game && run) {
             strcpy(msg, covered.c_str());
-            cout<<"Covered in a game service "<<covered<<endl;
             for (auto &i : players) {
                 showScore(*i);
-                write(i->address, msg, static_cast<size_t>(msgsize));
+                sendMessagetoPlayer(msg, i);
             }
-            //waitForAGuess();
             unique_lock<mutex> lock(guessMtx);
             guessCV.wait(lock);
             guess = false;
@@ -113,7 +109,7 @@ void gameService(){
         }
         string msg = "The word is guessed, it was " + word;
         for(auto &i: players) {
-            write(i->address, msg.c_str(), msg.size());
+            sendMessagetoPlayer(msg, i);
         }
     }
     Player *winner;
@@ -132,15 +128,15 @@ void gameService(){
     string msgWinner = "You are the winner! The score is "+ to_string(winner->score);
     string msgLoser = "The winner is ";
     for(auto &i: winners)
-        msgLoser+= to_string(i->address);
+        msgLoser+= to_string(i->address)+ " ";
     msgLoser+=". The score is "+ to_string(winner->score);
     for(auto &i : players) {
         for (auto &a : winners)
             if (a == i) {
-                write(i->address, msgWinner.c_str(), msgWinner.size());
+                sendMessagetoPlayer(msgWinner, i);
                 break;
             }
-        write(i->address, msgLoser.c_str(), msgLoser.size());
+        sendMessagetoPlayer(msgLoser, i);
         resetPlayer(i);
     }
     while(players.size()!=0)
@@ -154,9 +150,7 @@ void startNewGame(){
         newPlayersCV.wait(lock, []{return players.size()>=playersRequired;});
         cout<<"Starting a new game "<<endl;
         game = true;
-        thread gameThread(gameService);
-        cout<<"Thread join "<<endl;
-        gameThread.join();
+        gameService();
         cout<<"Game ended"<<endl;
         game = false;
     }
@@ -174,10 +168,19 @@ void clientService(int i) {
     while (run) {
         char m[2];
         memset(m, 0, 2);
-        read(i, m, 2);
+        int readBytes = read(i, m, 2);
+        if(readBytes < 0){
+            cout<<"Couldn't reach client "<<i<<endl;
+            if(currentPlayer.active){
+                currentPlayer.active = false;
+                activePlayers--;
+            }
+        }
         if (strcmp(m, "1") == 0) {
-            currentPlayer.active = false;
-            activePlayers--;
+            if(currentPlayer.active){
+                currentPlayer.active = false;
+                activePlayers--;
+            }
             playersCV.notify_one();
             return;
         }
@@ -194,7 +197,10 @@ void clientService(int i) {
             } else {
                 cout << "Too many players" << endl;
                 strcpy(msg, "Rejected, game started ");
-                write(i, msg, sizeof(msg));
+                int writeResult = static_cast<int>(write(i, msg, sizeof(msg)));
+                if(writeResult < 0) {
+                    return;
+                }
             }
         } else if (currentPlayer.active) {
             if (isInGame(i) && game) {
@@ -205,7 +211,7 @@ void clientService(int i) {
                         letter = word[a];
                         if (m == letter) {
                             covered[a] = word[a];
-                            sendMessage("You guessed!", i);
+                            sendMessagetoPlayer("You guessed!", &currentPlayer);
                             currentPlayer.score += 1;
                             cout << "current Player score " << currentPlayer.score << endl;
                             for (auto &z: players) {
@@ -222,7 +228,7 @@ void clientService(int i) {
                     currentPlayer.active = false;
                     activePlayers--;
                     playersCV.notify_one();
-                    write(i, "You can't guess, waiting for the game to finish...", 50);
+                    sendMessagetoPlayer("You can't guess, waiting for the game to finish...", &currentPlayer);
                 }
             }
         }
@@ -276,7 +282,6 @@ int main(int argc, char **argv) {
         getWordList();
 
         char msg[100];
-        int msgsize;
 
         cout << "Server running" << endl;
         thread shutdownThread(shutdownRequest);
@@ -287,11 +292,16 @@ int main(int argc, char **argv) {
             listen(socky, 1);
             int i = accept(socky, 0, 0);
             clients.push_back(i);
-            strcpy(msg, "Connected ");
-            msgsize = 9;
-            write(i, msg, msgsize);
-            thread clientServiceThread(clientService, i);
-            clientServiceThread.detach();
+            string msg = "Connect";
+            int writeResult = static_cast<int>(write(i, msg.c_str(), msg.size()));
+            if(writeResult < 0){
+                cout<<"Couldn't send message to "<<i<<endl;
+            }
+            else {
+                cout<<"Entering client thread" <<endl;
+                thread clientServiceThread(clientService, i);
+                clientServiceThread.detach();
+            }
         }
         shutdownThread.join();
         startGame.join();
