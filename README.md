@@ -1,5 +1,5 @@
 # hangman
-To build server:
+To build client:
 ```bash 
-c++ server.cpp -o server -pthread -std=c++11 -Wall
+c++ client.cpp -o client -pthread -std=c++11 -Wall
 ```
