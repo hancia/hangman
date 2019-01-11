@@ -7,7 +7,6 @@
 #include <cstdlib>
 #include <thread>
 #include <string.h>
-#include "Message.h"
 
 using namespace std;
 int sockyy = socket(PF_INET, SOCK_STREAM, 0);
@@ -37,11 +36,12 @@ int main(int argc, char **argv) {
     int result = connect(sockyy, (sockaddr *) &zmienna, 30);
     bool run = true;
     thread inputServiceThread(inputService, &run);
-    Message message{};
+    char msg[100];
+    int msgsize;
     ssize_t readBytes;
     while (run) {
-        readBytes = read(sockyy, message.msg, 100);
-        write(1, message.msg, readBytes);
+        readBytes = read(sockyy, msg, 100);
+        write(1, msg, readBytes);
         cout<<endl;
     }
     inputServiceThread.join();
