@@ -14,6 +14,8 @@
 #include <time.h>
 #include <atomic>
 #include <vector>
+#include <condition_variable>
+#include <mutex>
 #include "Hangman.h"
 
 using namespace std;
@@ -21,7 +23,6 @@ using namespace std;
 
 list<int> clients;
 list<Player*> players;
-const int noOfWords = 100;
 const int playersRequired = 2;
 //string words[noOfWords];
 vector<string> words;
@@ -33,7 +34,13 @@ int socky = socket(PF_INET, SOCK_STREAM, 0);
 bool game = false;
 atomic<bool> run(true);
 bool guess = false;
-
+mutex gameMtx;
+mutex guessMtx;
+mutex playersMtx;
+mutex newPlayersMtx;
+condition_variable guessCV;
+condition_variable playersCV;
+condition_variable newPlayersCV;
 
 bool isInGame(int player) {
     for (auto &i : players)
@@ -50,13 +57,12 @@ void sendMessage(string str, int address){
     write(address, msg, static_cast<size_t>(msgsize));
 }
 
-void waitForAGuess(){
-    while(!guess && run){
-        if(activePlayers<=1) {
-            game = false;
-            break;
-        }
-    }
+void playersLeft(){
+    unique_lock<mutex> lock(playersMtx);
+    playersCV.wait(lock, []{return activePlayers <= 1;});
+    cout<<"Ending game..."<<endl;
+    guessCV.notify_all();
+    game = false;
 }
 
 void showScore(Player player){
@@ -81,6 +87,8 @@ void gameService(){
     int index;
     char msg[100];
     int msgsize;
+    thread playerNumberHandler(playersLeft);
+    playerNumberHandler.detach();
     while(game && run){
         index = static_cast<int>(rand() % words.size());
         word = words[index];
@@ -97,8 +105,11 @@ void gameService(){
                 showScore(*i);
                 write(i->address, msg, static_cast<size_t>(msgsize));
             }
-            waitForAGuess();
+            //waitForAGuess();
+            unique_lock<mutex> lock(guessMtx);
+            guessCV.wait(lock);
             guess = false;
+            guessMtx.unlock();
         }
         string msg = "The word is guessed, it was " + word;
         for(auto &i: players) {
@@ -137,17 +148,17 @@ void gameService(){
 }
 
 
-void waitForPlayers(){
+void startNewGame(){
     while(run){
-        if(players.size() >= playersRequired){
-            cout<<"Starting a new game "<<endl;
-            game = true;
-            thread gameThread(gameService);
-            cout<<"Thread join "<<endl;
-            gameThread.join();
-            cout<<"Game ended"<<endl;
-            game = false;
-        }
+        unique_lock<mutex> lock(newPlayersMtx);
+        newPlayersCV.wait(lock, []{return players.size()>=playersRequired;});
+        cout<<"Starting a new game "<<endl;
+        game = true;
+        thread gameThread(gameService);
+        cout<<"Thread join "<<endl;
+        gameThread.join();
+        cout<<"Game ended"<<endl;
+        game = false;
     }
     exit(0);
 }
@@ -165,6 +176,9 @@ void clientService(int i) {
         memset(m, 0, 2);
         read(i, m, 2);
         if (strcmp(m, "1") == 0) {
+            currentPlayer.active = false;
+            activePlayers--;
+            playersCV.notify_one();
             return;
         }
         if (strcmp(m, "0") == 0) {
@@ -174,6 +188,7 @@ void clientService(int i) {
                     currentPlayer.active = true;
                     activePlayers++;
                     players.push_back(&currentPlayer);
+                    newPlayersCV.notify_one();
                     cout<<"No of players "<<players.size()<<endl;
                 }
             } else {
@@ -199,10 +214,14 @@ void clientService(int i) {
                         }
                     }
                     if (prevScore == currentPlayer.score) currentPlayer.fails++;
+                    guessMtx.lock();
                     guess = true;
+                    guessMtx.unlock();
+                    guessCV.notify_one();
                 } else {
                     currentPlayer.active = false;
                     activePlayers--;
+                    playersCV.notify_one();
                     write(i, "You can't guess, waiting for the game to finish...", 50);
                 }
             }
@@ -261,7 +280,7 @@ int main(int argc, char **argv) {
 
         cout << "Server running" << endl;
         thread shutdownThread(shutdownRequest);
-        thread startGame(waitForPlayers);
+        thread startGame(startNewGame);
 
 
         while (run) {
