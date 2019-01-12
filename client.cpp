@@ -26,6 +26,7 @@ void inputService() {
                 run = false;
             }
     }
+    exit(0);
 }
 
 
@@ -49,6 +50,7 @@ int main(int argc, char **argv) {
             run = false;
         }
         else {
+
             write(1, msg, readBytes);
             cout << endl;
         }

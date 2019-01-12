@@ -13,13 +13,12 @@
 #include <stdlib.h>
 #include <time.h>
 #include <atomic>
-#include <vector>
 #include <condition_variable>
 #include <mutex>
+#include <vector>
 #include "Hangman.h"
 
 using namespace std;
-
 
 list<int> clients;
 list<Player*> players;
@@ -30,7 +29,7 @@ string covered;
 int activePlayers = 0;
 
 int socky = socket(PF_INET, SOCK_STREAM, 0);
-bool game = false;
+atomic<bool> game(false);
 atomic<bool> run(true);
 bool guess = false;
 mutex guessMtx;
@@ -47,13 +46,22 @@ bool isInGame(int player) {
     return false;
 }
 
+void handleReachingError(Player currentPlayer) {
+    if (currentPlayer.active) {
+        if (game) {
+            currentPlayer.active = false;
+            activePlayers--;
+            playersCV.notify_all();
+        } else {
+            players.remove(&currentPlayer);
+        }
+    }
+}
+
 void sendMessagetoPlayer(string str, Player *player){
     int writeResult = static_cast<int>(write(player->address, str.c_str(), str.size()));
     if(writeResult < 0){
-        if(player->active) {
-            player->active = false;
-            activePlayers--;
-        }
+        handleReachingError(*player);
     }
 }
 
@@ -69,17 +77,12 @@ void showScore(Player player){
     string msg;
     msg = "Scores: ";
     write(player.address, msg.c_str(), msg.size());
+    msg = "";
     for(auto &i : players){
-        msg = to_string(i->address) + ": " + to_string(i->score) + " \n";
-        sendMessagetoPlayer(msg, i);
+            msg += to_string(i->address) + ": " + to_string(i->score) + " \n";
     }
+    sendMessagetoPlayer(msg, &player);
     sendMessagetoPlayer(state[player.fails], &player);
-}
-
-void resetPlayer(Player *player){
-    player->score = 0;
-    player->fails = 0;
-    player->active = false;
 }
 
 
@@ -112,6 +115,10 @@ void gameService(){
             sendMessagetoPlayer(msg, i);
         }
     }
+    for( auto &i : players)
+    {
+        sendMessagetoPlayer("Game over\n", i);
+    }
     Player *winner;
     winner = players.front();
     for(auto &i : players){
@@ -137,10 +144,11 @@ void gameService(){
                 break;
             }
         sendMessagetoPlayer(msgLoser, i);
-        resetPlayer(i);
     }
-    while(players.size()!=0)
-        players.pop_back();
+    cout<<"Deleting players..."<<endl;
+    for(auto &i: players)
+        delete i;
+    players.clear();
 }
 
 
@@ -157,83 +165,90 @@ void startNewGame(){
     exit(0);
 }
 
+bool checkPossibleMove(Player* currentPlayer, char* m) {
+    bool possibleMove = false;
+    if (currentPlayer->fails < 6) {
+        for (unsigned int idx = 0; idx < currentPlayer->letters.size(); idx++) {
+            if (*m == currentPlayer->letters[idx]) {
+                possibleMove = true;
+                currentPlayer->letters.erase(currentPlayer->letters.begin() + idx);
+                return possibleMove;
+            }
+            possibleMove = false;
+        }
+    }
+    return possibleMove;
+}
 
 void clientService(int i) {
-    char msg[100];
-    Player currentPlayer = Player();
-    currentPlayer.address = i;
-    currentPlayer.score = 0;
-    currentPlayer.fails = 0;
-    currentPlayer.active = false;
+    Player *currentPlayer = new Player();
+    currentPlayer->address = i;
     while (run) {
         char m[2];
         memset(m, 0, 2);
         int readBytes = read(i, m, 2);
-        if(readBytes < 0){
+        if(readBytes <= 0){
             cout<<"Couldn't reach client "<<i<<endl;
-            if(currentPlayer.active){
-                currentPlayer.active = false;
-                activePlayers--;
-            }
+            handleReachingError(*currentPlayer);
+            return;
         }
         if (strcmp(m, "1") == 0) {
-            if(currentPlayer.active){
-                currentPlayer.active = false;
-                activePlayers--;
-            }
-            playersCV.notify_one();
+            handleReachingError(*currentPlayer);
+            cout<<"Player "<<i<<" left"<<endl;
             return;
         }
         if (strcmp(m, "0") == 0) {
             if (players.size() < playersRequired) {
                 if (!isInGame(i)) {
                     cout << "Player " << i << " ready" << endl;
-                    currentPlayer.active = true;
+                    currentPlayer->active = true;
                     activePlayers++;
-                    players.push_back(&currentPlayer);
+                    players.push_back(currentPlayer);
                     newPlayersCV.notify_one();
                     cout<<"No of players "<<players.size()<<endl;
                 }
             } else {
                 cout << "Too many players" << endl;
-                strcpy(msg, "Rejected, game started ");
-                int writeResult = static_cast<int>(write(i, msg, sizeof(msg)));
+                string msgRej = "Rejected, game started ";
+                int writeResult = static_cast<int>(write(i, msgRej.c_str(), msgRej.size()));
                 if(writeResult < 0) {
                     return;
                 }
             }
-        } else if (currentPlayer.active) {
+        } else if (currentPlayer->active) {
             if (isInGame(i) && game) {
-                if (currentPlayer.fails < 6) {
-                    int prevScore = currentPlayer.score;
+                bool possibleMove = checkPossibleMove(currentPlayer,m);
+                if(possibleMove){
+                    int prevScore = currentPlayer->score;
                     for (unsigned int a = 0; a < word.size(); a++) {
-                        string letter;
-                        letter = word[a];
-                        if (m == letter) {
+                        if (*m == word[a]) {
                             covered[a] = word[a];
-                            sendMessagetoPlayer("You guessed!", &currentPlayer);
-                            currentPlayer.score += 1;
-                            cout << "current Player score " << currentPlayer.score << endl;
+                            sendMessagetoPlayer("You guessed!", currentPlayer);
+                            currentPlayer->score += 1;
+                            cout << "current Player score " << currentPlayer->score << endl;
                             for (auto &z: players) {
                                 cout << "Player " << z->address << " " << z->score << endl;
                             }
                         }
                     }
-                    if (prevScore == currentPlayer.score) currentPlayer.fails++;
+                    if (prevScore == currentPlayer->score) currentPlayer->fails++;
                     guessMtx.lock();
                     guess = true;
                     guessMtx.unlock();
                     guessCV.notify_one();
-                } else {
-                    currentPlayer.active = false;
+                }
+                else{
+                    sendMessagetoPlayer("You already tried this letter\n", currentPlayer);
+                }
+            } else {
+                    currentPlayer->active = false;
                     activePlayers--;
                     playersCV.notify_one();
-                    sendMessagetoPlayer("You can't guess, waiting for the game to finish...", &currentPlayer);
+                    sendMessagetoPlayer("You can't guess, waiting for the game to finish...", currentPlayer);
                 }
             }
         }
     }
-}
 
 
 void shutdownRequest() {
