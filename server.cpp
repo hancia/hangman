@@ -39,9 +39,11 @@ bool guess = false;
 mutex guessMtx;
 mutex playersMtx;
 mutex newPlayersMtx;
+mutex gameStartedMtx;
 condition_variable guessCV;
 condition_variable playersCV;
 condition_variable newPlayersCV;
+condition_variable gameStartedCV;
 
 bool isInGame(int player) {
     for (auto &i : players)
@@ -164,7 +166,7 @@ void gameService(){
         if ((*idx)->active)
         {
             resetPlayer(*idx);
-            idx++;// alternatively, i = items.erase(i);
+            idx++;
         }
         else
         {
@@ -181,6 +183,7 @@ void startNewGame(){
         newPlayersCV.wait(lock, []{return activePlayers>=playersRequired;});
         cout<<"Starting a new game "<<endl;
         game = true;
+        gameStartedCV.notify_all();
         gameService();
         cout<<"Game ended"<<endl;
         game = false;
@@ -223,15 +226,18 @@ void readyTimeoutHandler(Player *player){
 }
 
 void moveTimoutHandler(Player *player){
+    unique_lock<mutex> lock(gameStartedMtx);
+    gameStartedCV.wait(lock);
     clock_t start = clock();
-    cout<<player->moved<<endl;
+    cout<<"Move timeout handler for player "<<player->address<<endl;
     while(game && run && !player->moved && player->active){
-        cout<<player->moved<<endl;
         double time = double(clock() - start) / CLOCKS_PER_SEC;
         if (time >= moveTimeout) {
             cout << "Player " << player->address << " inactive" << endl;
             sendMessagetoPlayer("You have been inactive, you can't play", player);
             player->active = false;
+            activePlayers--;
+            playersCV.notify_all();
             break;
         }
     }
@@ -244,10 +250,10 @@ void clientService(int i) {
     readyTimeoutThread.detach();
     while (run) {
         currentPlayer->moved = false;
+        thread moveMonitor(moveTimoutHandler, currentPlayer);
+        moveMonitor.detach();
         char m[2];
         memset(m, 0, 2);
-//        thread moveTimeoutThread(moveTimoutHandler,currentPlayer);
-//        moveTimeoutThread.detach();
         int readBytes = read(i, m, 2);
         if (readBytes <= 0) {
             cout << "Couldn't reach client " << i << endl;
@@ -267,7 +273,7 @@ void clientService(int i) {
                     currentPlayer->active = true;
                     activePlayers++;
                     players.push_back(currentPlayer);
-                    newPlayersCV.notify_one();
+                    newPlayersCV.notify_all();
                     cout << "No of players " << players.size() << endl;
                 }
             } else {
@@ -288,10 +294,6 @@ void clientService(int i) {
                             covered[a] = word[a];
                             sendMessagetoPlayer("You guessed!", currentPlayer);
                             currentPlayer->score += 1;
-                            cout << "current Player score " << currentPlayer->score << endl;
-                            for (auto &z: players) {
-                                cout << "Player " << z->address << " " << z->score << endl;
-                            }
                         }
                     }
                     if (prevScore == currentPlayer->score) currentPlayer->fails++;
@@ -305,7 +307,7 @@ void clientService(int i) {
             } else {
                 currentPlayer->active = false;
                 activePlayers--;
-                playersCV.notify_one();
+                playersCV.notify_all();
                 sendMessagetoPlayer("You can't guess, waiting for the game to finish...", currentPlayer);
             }
         }
