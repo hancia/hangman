@@ -28,9 +28,9 @@ vector<string> words;
 string word;
 string covered;
 int activePlayers = 0;
-int readyTimeout = 2;
-int moveTimeout = 2;
-int moveWarning = 2;
+int readyTimeout = 100;
+int moveTimeout = 100;
+int moveWarning = 100;
 
 int socky = socket(PF_INET, SOCK_STREAM, 0);
 atomic<bool> game(false);
@@ -47,7 +47,7 @@ condition_variable gameStartedCV;
 
 bool isInGame(int player) {
     for (auto &i : players)
-        if (i->address == player)
+        if (i->address == player && i->active)
             return true;
     return false;
 }
@@ -59,6 +59,8 @@ void handleReachingError(Player *currentPlayer) {
             activePlayers--;
             playersCV.notify_all();
         } else {
+            activePlayers--;
+            playersCV.notify_all();
             players.remove(currentPlayer);
         }
     }
@@ -80,15 +82,17 @@ void playersLeft(){
 }
 
 void showScore(Player player){
-    string msg;
-    msg = "Scores: ";
-    write(player.address, msg.c_str(), msg.size());
-    msg = "";
+    string msg, st;
+    msg = "Scores ";
     for(auto &i : players){
-            msg += to_string(i->address) + ": " + to_string(i->score) + " \n";
+            msg += to_string(i->address) + ": " + to_string(i->score) + " #\n";
     }
+    msg.append("$\n");
     sendMessagetoPlayer(msg, &player);
-    sendMessagetoPlayer(state[player.fails], &player);
+    st = "Hangman ";
+    st.append(state[player.fails]);
+    st.append("$\n");
+    sendMessagetoPlayer(st, &player);
 }
 
 void resetPlayer(Player *player){
@@ -123,7 +127,8 @@ void gameService(){
             guess = false;
             guessMtx.unlock();
         }
-        string msg = "The word is guessed, it was " + word;
+        string msg = "Server The word was " + word;
+        msg.append("\n$\n");
         for(auto &i: players) {
             sendMessagetoPlayer(msg, i);
         }
@@ -133,7 +138,7 @@ void gameService(){
     }
     for( auto &i : players)
     {
-        sendMessagetoPlayer("Game over\n", i);
+        sendMessagetoPlayer("Server Game over\n$\n", i);
     }
     Player *winner;
     winner = players.front();
@@ -148,11 +153,11 @@ void gameService(){
             cout<<"Its a draw!!!"<<endl;
         }
     }
-    string msgWinner = "You are the winner! The score is "+ to_string(winner->score);
-    string msgLoser = "The winner is ";
+    string msgWinner = "Server You are the winner! The score is "+ to_string(winner->score)+ "\n$\n";
+    string msgLoser = "Server The winner is ";
     for(auto &i: winners)
         msgLoser+= to_string(i->address)+ " ";
-    msgLoser+=". The score is "+ to_string(winner->score);
+    msgLoser+=". The score is "+ to_string(winner->score) + "\n$\n";
     for(auto &i : players) {
         for (auto &a : winners)
             if (a == i) {
@@ -165,6 +170,7 @@ void gameService(){
     while(idx != players.end()){
         if ((*idx)->active)
         {
+            activePlayers--;
             resetPlayer(*idx);
             idx++;
         }
@@ -213,7 +219,7 @@ void readyTimeoutHandler(Player *player){
             double time = double(clock() - start) / CLOCKS_PER_SEC;
             if (time >= readyTimeout) {
                 cout << "Player " << player->address << " inactive" << endl;
-                sendMessagetoPlayer("You have been inactive, you are being removed from queue", player);
+                sendMessagetoPlayer(" Server You have been inactive, you are being removed from queue\n$\n", player);
                 players.remove(player);
                 break;
             }
@@ -234,13 +240,13 @@ void moveTimoutHandler(Player *player){
     while(game && run && !player->moved && player->active){
         double time = double(clock() - start) / CLOCKS_PER_SEC;
         if(time >= moveWarning && time < (moveTimeout + moveWarning) && !notified){
-            string msg ="If you dont move in " + to_string(moveTimeout) +" s you will lose\n";
+            string msg ="Server If you dont move in " + to_string(moveTimeout) +" s you will lose\n$\n";
             sendMessagetoPlayer(msg,player);
             notified = true;
         }
         if (time >= moveTimeout + moveWarning && notified) {
             cout << "Player " << player->address << " inactive" << endl;
-            sendMessagetoPlayer("You have been inactive, you can't play\n", player);
+            sendMessagetoPlayer("Server You have been inactive, you can't play\n$\n", player);
             player->active = false;
             activePlayers--;
             playersCV.notify_all();
@@ -276,15 +282,16 @@ void clientService(int i) {
             if (activePlayers < playersRequired) {
                 if (!isInGame(i)) {
                     cout << "Player " << i << " ready" << endl;
+                    sendMessagetoPlayer("Server You are in the lobby\n$\n",currentPlayer);
                     currentPlayer->active = true;
                     activePlayers++;
                     players.push_back(currentPlayer);
                     newPlayersCV.notify_all();
-                    cout << "No of players " << players.size() << endl;
+                    cout<<"Number of active players "<<activePlayers<<endl;
                 }
             } else {
                 cout << "Too many players" << endl;
-                string msgRej = "Rejected, game started ";
+                string msgRej = "Server Rejected, game started \n$\n";
                 int writeResult = static_cast<int>(write(i, msgRej.c_str(), msgRej.size()));
                 if (writeResult < 0) {
                     return;
@@ -298,7 +305,7 @@ void clientService(int i) {
                     for (unsigned int a = 0; a < word.size(); a++) {
                         if (*m == word[a]) {
                             covered[a] = word[a];
-                            sendMessagetoPlayer("You guessed!", currentPlayer);
+                            sendMessagetoPlayer("Server You guessed!\n$\n", currentPlayer);
                             currentPlayer->score += 1;
                         }
                     }
@@ -308,13 +315,13 @@ void clientService(int i) {
                     guessMtx.unlock();
                     guessCV.notify_one();
                 } else {
-                    sendMessagetoPlayer("You already tried this letter\n", currentPlayer);
+                    sendMessagetoPlayer("Server You already tried this letter\n$\n", currentPlayer);
                 }
             } else {
                 currentPlayer->active = false;
                 activePlayers--;
                 playersCV.notify_all();
-                sendMessagetoPlayer("You can't guess, waiting for the game to finish...", currentPlayer);
+                sendMessagetoPlayer("Server You can't guess, waiting for the game to finish...\n$\n", currentPlayer);
             }
         }
     }
@@ -376,7 +383,7 @@ int main(int argc, char **argv) {
         while (run) {
             listen(socky, 1);
             int i = accept(socky, 0, 0);
-            string msg = "Connect";
+            string msg = "Server Connected \n $\n";
             int writeResult = static_cast<int>(write(i, msg.c_str(), msg.size()));
             if(writeResult < 0){
                 cout<<"Couldn't send message to "<<i<<endl;
