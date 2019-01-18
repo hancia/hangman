@@ -17,7 +17,7 @@ public:
         this->active = false;
         this->score = 0;
         this->fails = 0;
-        this ->letters = {'a','b','c','d','e','f','g','h','i','j','k','l','m','n','o','p','r','s','t','u','w','v','y','z'};
+        this ->letters = {'a','b','c','d','e','f','g','h','i','j','k','l','m','n','o','p','r','s','t','q','u','w','v','x','y','z'};
     }
 };
 

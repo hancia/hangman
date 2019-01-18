@@ -16,7 +16,9 @@
 #include <condition_variable>
 #include <mutex>
 #include <vector>
+#include<ctime>
 #include "Hangman.h"
+#include "Alphabet.h"
 
 using namespace std;
 
@@ -27,6 +29,8 @@ vector<string> words;
 string word;
 string covered;
 int activePlayers = 0;
+int readyTimeout = 2;
+int moveTimeout = 2;
 
 int socky = socket(PF_INET, SOCK_STREAM, 0);
 atomic<bool> game(false);
@@ -85,6 +89,13 @@ void showScore(Player player){
     sendMessagetoPlayer(state[player.fails], &player);
 }
 
+void resetPlayer(Player *player){
+    player->score = 0;
+    player->fails = 0;
+    player->active = false;
+    player->letters = alphabet;
+}
+
 
 void gameService(){
     int index;
@@ -113,6 +124,9 @@ void gameService(){
         string msg = "The word is guessed, it was " + word;
         for(auto &i: players) {
             sendMessagetoPlayer(msg, i);
+        }
+        for(auto &i: players){
+            i->letters = alphabet;
         }
     }
     for( auto &i : players)
@@ -145,17 +159,15 @@ void gameService(){
             }
         sendMessagetoPlayer(msgLoser, i);
     }
-    cout<<"Deleting players..."<<endl;
     for(auto &i: players)
-        delete i;
-    players.clear();
+       resetPlayer(i);
 }
 
 
 void startNewGame(){
     while(run){
         unique_lock<mutex> lock(newPlayersMtx);
-        newPlayersCV.wait(lock, []{return players.size()>=playersRequired;});
+        newPlayersCV.wait(lock, []{return activePlayers>=playersRequired;});
         cout<<"Starting a new game "<<endl;
         game = true;
         gameService();
@@ -180,45 +192,61 @@ bool checkPossibleMove(Player* currentPlayer, char* m) {
     return possibleMove;
 }
 
+//void readyTimeoutHandler(Player *player){
+//    clock_t start = clock();
+//    while(!game && run){
+//        double time = double(clock()-start)/CLOCKS_PER_SEC;
+//        if(time >= readyTimeout){
+//            cout<<"Player "<<player->address<<" inactive"<<endl;
+//            sendMessagetoPlayer("You have been inactive, you are being removed from queue", player);
+//            //sendMessagetoPlayer("Rm", player);
+//            players.remove(player);
+//            break;
+//        }
+//    }
+//}
+
 void clientService(int i) {
     Player *currentPlayer = new Player();
     currentPlayer->address = i;
+//    thread readyTimeoutThread(readyTimeoutHandler, currentPlayer);
+//    readyTimeoutThread.detach();
     while (run) {
         char m[2];
         memset(m, 0, 2);
         int readBytes = read(i, m, 2);
-        if(readBytes <= 0){
-            cout<<"Couldn't reach client "<<i<<endl;
+        if (readBytes <= 0) {
+            cout << "Couldn't reach client " << i << endl;
             handleReachingError(*currentPlayer);
             return;
         }
         if (strcmp(m, "1") == 0) {
             handleReachingError(*currentPlayer);
-            cout<<"Player "<<i<<" left"<<endl;
+            cout << "Player " << i << " left" << endl;
             return;
         }
         if (strcmp(m, "0") == 0) {
-            if (players.size() < playersRequired) {
+            if (activePlayers < playersRequired) {
                 if (!isInGame(i)) {
                     cout << "Player " << i << " ready" << endl;
                     currentPlayer->active = true;
                     activePlayers++;
                     players.push_back(currentPlayer);
                     newPlayersCV.notify_one();
-                    cout<<"No of players "<<players.size()<<endl;
+                    cout << "No of players " << players.size() << endl;
                 }
             } else {
                 cout << "Too many players" << endl;
                 string msgRej = "Rejected, game started ";
                 int writeResult = static_cast<int>(write(i, msgRej.c_str(), msgRej.size()));
-                if(writeResult < 0) {
+                if (writeResult < 0) {
                     return;
                 }
             }
         } else if (currentPlayer->active) {
             if (isInGame(i) && game) {
-                bool possibleMove = checkPossibleMove(currentPlayer,m);
-                if(possibleMove){
+                bool possibleMove = checkPossibleMove(currentPlayer, m);
+                if (possibleMove) {
                     int prevScore = currentPlayer->score;
                     for (unsigned int a = 0; a < word.size(); a++) {
                         if (*m == word[a]) {
@@ -236,19 +264,18 @@ void clientService(int i) {
                     guess = true;
                     guessMtx.unlock();
                     guessCV.notify_one();
-                }
-                else{
+                } else {
                     sendMessagetoPlayer("You already tried this letter\n", currentPlayer);
                 }
             } else {
-                    currentPlayer->active = false;
-                    activePlayers--;
-                    playersCV.notify_one();
-                    sendMessagetoPlayer("You can't guess, waiting for the game to finish...", currentPlayer);
-                }
+                currentPlayer->active = false;
+                activePlayers--;
+                playersCV.notify_one();
+                sendMessagetoPlayer("You can't guess, waiting for the game to finish...", currentPlayer);
             }
         }
     }
+}
 
 
 void shutdownRequest() {
