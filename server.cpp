@@ -23,7 +23,7 @@
 using namespace std;
 
 list<Player*> players;
-const int playersRequired = 2;
+const int playersRequired = 3;
 vector<string> words;
 string word;
 string covered;
@@ -162,13 +162,14 @@ void gameService(){
     }
     list<Player*> winners;
     winners.push_back(winner);
+    string msgWinner = "Server You are the winner! The score is "+ to_string(winner->score)+ "\n$\n";
     for(auto &i: players){
         if(i->score==winner->score&&i != winner) {
             winners.push_back(i);
             cout<<"Its a draw!!!"<<endl;
+            msgWinner = "Server It's a draw! \n$\n";
         }
     }
-    string msgWinner = "Server You are the winner! The score is "+ to_string(winner->score)+ "\n$\n";
     string msgLoser = "Server The winner is ";
     for(auto &i: winners)
         msgLoser+= to_string(i->address)+ " ";
@@ -302,9 +303,8 @@ void clientService(int i) {
                         players.push_back(currentPlayer);
                         newPlayersCV.notify_all();
                         cout << "Number of active players " << activePlayers << endl;
-                }else{
-                    if(!currentPlayer->active){
-                        cout<<"no tu wls jestesmy"<<endl;
+                }else {
+                    if (!currentPlayer->active) {
                         sendMessagetoPlayer("Server You are in the lobby\n$\n", currentPlayer);
                         currentPlayer->active = true;
                         activePlayers++;
@@ -402,8 +402,6 @@ int main(int argc, char **argv) {
 
         getWordList();
 
-        char msg[100];
-
         cout << "Server running" << endl;
         thread shutdownThread(shutdownRequest);
         thread startGame(startNewGame);
@@ -412,7 +410,7 @@ int main(int argc, char **argv) {
         while (run) {
             listen(socky, 1);
             int i = accept(socky, 0, 0);
-            string msg = "Server Connected \n $\n";
+            string msg = "Id " + to_string(i) +  "\n $\n";
             int writeResult = static_cast<int>(write(i, msg.c_str(), msg.size()));
             if(writeResult < 0){
                 cout<<"Couldn't send message to "<<i<<endl;
