@@ -229,12 +229,18 @@ void moveTimoutHandler(Player *player){
     unique_lock<mutex> lock(gameStartedMtx);
     gameStartedCV.wait(lock);
     clock_t start = clock();
+    bool notified = false;
     cout<<"Move timeout handler for player "<<player->address<<endl;
     while(game && run && !player->moved && player->active){
         double time = double(clock() - start) / CLOCKS_PER_SEC;
-        if (time >= moveTimeout) {
+        if(time >= moveWarning && time < (moveTimeout + moveWarning) && !notified){
+            string msg ="If you dont move in " + to_string(moveTimeout) +" s you will lose\n";
+            sendMessagetoPlayer(msg,player);
+            notified = true;
+        }
+        if (time >= moveTimeout + moveWarning && notified) {
             cout << "Player " << player->address << " inactive" << endl;
-            sendMessagetoPlayer("You have been inactive, you can't play", player);
+            sendMessagetoPlayer("You have been inactive, you can't play\n", player);
             player->active = false;
             activePlayers--;
             playersCV.notify_all();
