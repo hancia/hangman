@@ -22,7 +22,6 @@
 
 using namespace std;
 
-list<int> clients;
 list<Player*> players;
 const int playersRequired = 2;
 vector<string> words;
@@ -31,6 +30,7 @@ string covered;
 int activePlayers = 0;
 int readyTimeout = 2;
 int moveTimeout = 2;
+int moveWarning = 2;
 
 int socky = socket(PF_INET, SOCK_STREAM, 0);
 atomic<bool> game(false);
@@ -50,14 +50,14 @@ bool isInGame(int player) {
     return false;
 }
 
-void handleReachingError(Player currentPlayer) {
-    if (currentPlayer.active) {
+void handleReachingError(Player *currentPlayer) {
+    if (currentPlayer->active) {
         if (game) {
-            currentPlayer.active = false;
+            currentPlayer->active = false;
             activePlayers--;
             playersCV.notify_all();
         } else {
-            players.remove(&currentPlayer);
+            players.remove(currentPlayer);
         }
     }
 }
@@ -65,7 +65,7 @@ void handleReachingError(Player currentPlayer) {
 void sendMessagetoPlayer(string str, Player *player){
     int writeResult = static_cast<int>(write(player->address, str.c_str(), str.size()));
     if(writeResult < 0){
-        handleReachingError(*player);
+        handleReachingError(player);
     }
 }
 
@@ -159,8 +159,19 @@ void gameService(){
             }
         sendMessagetoPlayer(msgLoser, i);
     }
-    for(auto &i: players)
-       resetPlayer(i);
+    auto idx = players.begin();
+    while(idx != players.end()){
+        if ((*idx)->active)
+        {
+            resetPlayer(*idx);
+            idx++;// alternatively, i = items.erase(i);
+        }
+        else
+        {
+            cout << "Removing inactive player " << endl;
+            players.erase(idx++);
+        }
+    }
 }
 
 
@@ -192,36 +203,60 @@ bool checkPossibleMove(Player* currentPlayer, char* m) {
     return possibleMove;
 }
 
-//void readyTimeoutHandler(Player *player){
-//    clock_t start = clock();
-//    while(!game && run){
-//        double time = double(clock()-start)/CLOCKS_PER_SEC;
-//        if(time >= readyTimeout){
-//            cout<<"Player "<<player->address<<" inactive"<<endl;
-//            sendMessagetoPlayer("You have been inactive, you are being removed from queue", player);
-//            //sendMessagetoPlayer("Rm", player);
-//            players.remove(player);
-//            break;
-//        }
-//    }
-//}
+void readyTimeoutHandler(Player *player){
+    clock_t start = clock();
+    while(!game && run){
+        if(!player->active) {
+            double time = double(clock() - start) / CLOCKS_PER_SEC;
+            if (time >= readyTimeout) {
+                cout << "Player " << player->address << " inactive" << endl;
+                sendMessagetoPlayer("You have been inactive, you are being removed from queue", player);
+                players.remove(player);
+                break;
+            }
+        }
+        else {
+            cout<<"Player "<<player->address<<" active"<<endl;
+            break;
+        }
+    }
+}
+
+void moveTimoutHandler(Player *player){
+    clock_t start = clock();
+    cout<<player->moved<<endl;
+    while(game && run && !player->moved && player->active){
+        cout<<player->moved<<endl;
+        double time = double(clock() - start) / CLOCKS_PER_SEC;
+        if (time >= moveTimeout) {
+            cout << "Player " << player->address << " inactive" << endl;
+            sendMessagetoPlayer("You have been inactive, you can't play", player);
+            player->active = false;
+            break;
+        }
+    }
+}
 
 void clientService(int i) {
     Player *currentPlayer = new Player();
     currentPlayer->address = i;
-//    thread readyTimeoutThread(readyTimeoutHandler, currentPlayer);
-//    readyTimeoutThread.detach();
+    thread readyTimeoutThread(readyTimeoutHandler, currentPlayer);
+    readyTimeoutThread.detach();
     while (run) {
+        currentPlayer->moved = false;
         char m[2];
         memset(m, 0, 2);
+//        thread moveTimeoutThread(moveTimoutHandler,currentPlayer);
+//        moveTimeoutThread.detach();
         int readBytes = read(i, m, 2);
         if (readBytes <= 0) {
             cout << "Couldn't reach client " << i << endl;
-            handleReachingError(*currentPlayer);
+            handleReachingError(currentPlayer);
             return;
         }
+        else currentPlayer->moved = true;
         if (strcmp(m, "1") == 0) {
-            handleReachingError(*currentPlayer);
+            handleReachingError(currentPlayer);
             cout << "Player " << i << " left" << endl;
             return;
         }
@@ -333,7 +368,6 @@ int main(int argc, char **argv) {
         while (run) {
             listen(socky, 1);
             int i = accept(socky, 0, 0);
-            clients.push_back(i);
             string msg = "Connect";
             int writeResult = static_cast<int>(write(i, msg.c_str(), msg.size()));
             if(writeResult < 0){
