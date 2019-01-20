@@ -192,6 +192,7 @@ void gameService(){
         }
         else
         {
+            resetPlayer(*idx);
             cout << "Removing inactive player " <<(*idx)->address<< endl;
             players.erase(idx++);
         }
